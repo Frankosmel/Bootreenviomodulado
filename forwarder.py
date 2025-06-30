@@ -4,21 +4,20 @@
 class Forwarder:
     def __init__(self, app, config, mensajes):
         """
-        :param app: instancia de telegram.ext.Application
-        :param config: dict de config.json
+        :param app: instancia de Application
+        :param config: dict con config.json
         :param mensajes: lista de mensajes programados
         """
-        self.app = app
         self.bot = app.bot
         self.config = config
         self.mensajes = mensajes
 
     async def reenviar_todos(self):
         """
-        Itera sobre todos los mensajes programados y los reenvía según su configuración.
+        Itera sobre cada mensaje programado y lo reenvía
+        o bien a 'destinos' o bien a la lista cfg['listas_destinos'][dest_list].
         """
         for m in self.mensajes:
-            # Determina destinos: todos o lista específica
             if m.get("dest_all", True):
                 dests = self.config.get("destinos", [])
             else:
