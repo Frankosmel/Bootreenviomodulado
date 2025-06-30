@@ -1,4 +1,5 @@
-# main.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 from telegram.ext import Application
 from logger_config import setup_logging
@@ -8,31 +9,31 @@ from handlers import get_handlers
 from scheduler import Scheduler
 
 def main():
-    # 1) Logging
+    # 1) Configurar logging
     setup_logging()
 
-    # 2) Carga configuración y mensajes
+    # 2) Cargar configuración y mensajes
     config = load_config()
     mensajes_mgr = load_mensajes()
 
-    # 3) Define función de startup para arrancar el scheduler dentro del loop
+    # 3) Definir callback para arrancar el scheduler dentro del event loop
     async def on_startup(application):
         sched = Scheduler(application, config, mensajes_mgr)
         sched.start()
 
-    # 4) Construye la aplicación, inyectando el on_startup
+    # 4) Construir la aplicación y registrar el callback
     app = (
         Application.builder()
         .token(config["bot_token"])
-        .post_init(on_startup)  # se ejecuta cuando el loop ya está corriendo
+        .post_init(on_startup)
         .build()
     )
 
-    # 5) Registra todos los handlers
+    # 5) Registrar handlers
     for handler in get_handlers():
         app.add_handler(handler)
 
-    # 6) Arranca el polling (esto levanta el event loop)
+    # 6) Iniciar polling (esto levanta el event loop)
     app.run_polling()
 
 if __name__ == "__main__":
