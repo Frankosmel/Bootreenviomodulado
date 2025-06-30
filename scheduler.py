@@ -7,7 +7,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 class Scheduler:
     def __init__(self, app, config, mensajes_manager):
         """
-        Recibe el módulo mensajes_manager (no la lista).
+        :param app: instancia de Application
+        :param config: dict con config.json
+        :param mensajes_manager: módulo mensajes_manager
         """
         tz = pytz.timezone(config.get("timezone", "UTC"))
         self.scheduler = AsyncIOScheduler(timezone=tz)
@@ -16,6 +18,10 @@ class Scheduler:
         self.mensajes_manager = mensajes_manager
 
     def start(self):
+        """
+        Programa y arranca el job de reenvío repetitivo.
+        Debe llamarse dentro del loop (usamos post_init).
+        """
         interval = self.config.get("intervalo_segundos", 60)
         self.scheduler.add_job(
             self._run_forwarder,
@@ -24,12 +30,14 @@ class Scheduler:
             id="forward_job",
             replace_existing=True
         )
-        # Ahora sí hay un event loop corriendo (post_init)
         self.scheduler.start()
 
     async def _run_forwarder(self):
+        """
+        Carga mensajes con mensajes_manager.load_mensajes()
+        y les aplica Forwarder.reenviar_todos().
+        """
         from forwarder import Forwarder
-        # load_mensajes() nos devuelve la lista actualizada
-        mensajes = self.mensajes_manager.load_mensajes()
-        f = Forwarder(self.app, self.config, mensajes)
+        msgs = self.mensajes_manager.load_mensajes()
+        f = Forwarder(self.app, self.config, msgs)
         await f.reenviar_todos()
