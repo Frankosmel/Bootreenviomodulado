@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    ContextTypes, CommandHandler, MessageHandler, filters
+)
 from decorators import admin_only, log_exceptions
 from keyboards import MAIN_KB, BACK_KB
 from config_manager import load_config, save_config
@@ -34,12 +36,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KB)
     context.user_data.clear()
 
-
 @admin_only
 @log_exceptions
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handler único que gestiona todos los flujos basados en context.user_data['waiting_for'].
+    Handler único que gestiona todos los flujos basados en
+    context.user_data['waiting_for'].
     """
     cfg = load_config()
     mens = mensajes_manager.load_mensajes()
@@ -47,7 +49,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting = context.user_data.get("waiting_for")
 
     # ── AUTO-VINCULACIÓN DE CANAL ──
-    fchat = getattr(update.message, "forward_from_chat", None)
+    # Detecta forward desde canal público o privado
+    fchat = getattr(update.message, "forward_from_chat", None) or getattr(update.message, "sender_chat", None)
     if not cfg.get("origen_chat_id") and fchat:
         cid = str(fchat.id)
         cfg["origen_chat_id"] = cid
@@ -71,7 +74,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if waiting == "channel_forward":
-        fchat = getattr(update.message, "forward_from_chat", None)
+        # Igual detección de canal privado/público
+        fchat = getattr(update.message, "forward_from_chat", None) or getattr(update.message, "sender_chat", None)
         if fchat:
             cid = str(fchat.id)
             cfg["origen_chat_id"] = cid
@@ -83,7 +87,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(
-                "❌ Ese no es un mensaje reenviado. Intenta de nuevo.",
+                "❌ Ese no es un mensaje reenviado. Usa el botón «Reenviar».",
                 parse_mode="Markdown",
                 reply_markup=BACK_KB
             )
@@ -124,8 +128,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop("waiting_for")
             else:
                 menu = [[n] for n in lists] + [["🔙 Volver"]]
-                await update.message.reply_text("📂 *Listas Disponibles:*", parse_mode="Markdown",
-                                                reply_markup=ReplyKeyboardMarkup(menu, resize_keyboard=True))
+                await update.message.reply_text(
+                    "📂 *Listas Disponibles:*",
+                    parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(menu, resize_keyboard=True)
+                )
                 context.user_data["waiting_for"] = "manage_lists"
         elif text == "🔙 Volver":
             await start(update, context)
@@ -156,7 +163,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if waiting == "new_list_name":
         context.user_data["new_list_name"] = text.strip()
-        await update.message.reply_text("📋 Ahora envía los IDs separados por comas o líneas:", reply_markup=BACK_KB)
+        await update.message.reply_text("📋 Envía los IDs separados por comas o líneas:", reply_markup=BACK_KB)
         context.user_data["waiting_for"] = "new_list_ids"
         return
 
@@ -177,7 +184,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lists = cfg.get("listas_destinos", {})
             if text in lists:
                 kb = ReplyKeyboardMarkup([["📋 Ver", "❌ Eliminar"], ["🔙 Volver"]], resize_keyboard=True)
-                await update.message.reply_text(f"📂 *{text}* ({len(lists[text])} destinos)", parse_mode="Markdown", reply_markup=kb)
+                await update.message.reply_text(
+                    f"📂 *{text}* ({len(lists[text])} destinos)",
+                    parse_mode="Markdown",
+                    reply_markup=kb
+                )
                 context.user_data["waiting_for"] = f"list_{text}"
         return
 
@@ -237,8 +248,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ No hay listas.", reply_markup=MAIN_KB)
                 context.user_data.pop("waiting_for")
             else:
-                kb = ReplyKeyboardMarkup([[n] for n in lists] + [["🔙 Volver"]], resize_keyboard=True)
-                await update.message.reply_text("📋 Elige lista:", reply_markup=kb)
+                kb = [[n] for n in lists] + [["🔙 Volver"]]
+                await update.message.reply_text("📋 Elige lista:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
                 context.user_data["waiting_for"] = f"msg_list_{idx}"
         elif text == "✅ Guardar":
             await update.message.reply_text("✅ Mensaje guardado.", reply_markup=MAIN_KB)
@@ -276,14 +287,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ No hay mensajes para editar.", reply_markup=MAIN_KB)
             return
         page_items, has_next = paginate_list(mens, 0, ITEMS_PER_PAGE)
-        lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)"
-                          for i, m in enumerate(page_items))
+        lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i, m in enumerate(page_items))
         kb = [[str(i+1) for i in range(len(page_items))]]
         if has_next:
             kb.append(["➡️ Siguiente"])
         kb.append(["🔙 Volver"])
-        await update.message.reply_text(f"✏️ *Selecciona mensaje:*\n{lines}", parse_mode="Markdown",
-                                        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+        await update.message.reply_text(
+            f"✏️ *Selecciona mensaje:*\n{lines}",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+        )
         context.user_data.update({"waiting_for": "edit_select", "edit_page": 0})
         return
 
@@ -312,8 +325,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if has_next:
                     kb.append(["➡️ Siguiente"])
                 kb.append(["🔙 Volver"])
-                await update.message.reply_text(f"✏️ *Selecciona mensaje:*\n{lines}", parse_mode="Markdown",
-                                                reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+                await update.message.reply_text(
+                    f"✏️ *Selecciona mensaje:*\n{lines}",
+                    parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+                )
             else:
                 await start(update, context)
         return
@@ -330,8 +346,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Mensaje eliminado.", reply_markup=MAIN_KB)
             context.user_data.pop("waiting_for")
         elif text == "👥 Cambiar Destino":
-            await update.message.reply_text("👥 ¿Enviar a todos o lista?", reply_markup=ReplyKeyboardMarkup(
-                [["👥 A Todos","📋 Lista"],["🔙 Volver"]], resize_keyboard=True))
+            await update.message.reply_text(
+                "👥 ¿Enviar a todos o lista?",
+                reply_markup=ReplyKeyboardMarkup([["👥 A Todos","📋 Lista"],["🔙 Volver"]], resize_keyboard=True)
+            )
             context.user_data["waiting_for"] = "edit_choose_dest"
         elif text == "📋 Cambiar Lista":
             lists = list(cfg.get("listas_destinos",{}).keys())
@@ -392,7 +410,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("waiting_for")
         return
 
-    # ── 6) Eliminar Mensaje Rápido ──
+    # ── 6) Eliminar Mensaje ──
     if text == "🗑️ Eliminar Mensaje" and not waiting:
         if not mens:
             await update.message.reply_text("⚠️ No hay mensajes para eliminar.", reply_markup=MAIN_KB)
@@ -413,7 +431,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("waiting_for")
         return
 
-    # ── 7) Cambiar Intervalo Global / Por Mensaje / Por Lista ──
+    # ── 7) Cambiar Intervalo ──
     if text == "🔁 Cambiar Intervalo" and not waiting:
         kb = ReplyKeyboardMarkup([
             ["🌐 Global", "📄 Por Mensaje"],
@@ -434,15 +452,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop("waiting_for")
             else:
                 page_items, has_next = paginate_list(mens, 0, ITEMS_PER_PAGE)
-                lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)"
-                                  for i, m in enumerate(page_items))
+                lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i, m in enumerate(page_items))
                 kb = [[str(i+1) for i in range(len(page_items))]]
                 if has_next:
                     kb.append(["➡️ Siguiente"])
                 kb.append(["🔙 Volver"])
-                await update.message.reply_text(f"📄 *Selecciona mensaje:* \n{lines}",
-                                                parse_mode="Markdown",
-                                                reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+                await update.message.reply_text(
+                    f"📄 *Selecciona mensaje:*\n{lines}",
+                    parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+                )
                 context.user_data.update({"waiting_for": "interval_select", "interval_page": 0})
         elif text == "📁 Por Lista":
             lists = list(cfg.get("listas_destinos",{}).keys())
@@ -463,14 +482,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             iv = int(text)
             cfg["intervalo_segundos"] = iv
             save_config(cfg)
-            await update.message.reply_text(f"✅ Intervalo global: {iv}s.", reply_markup=MAIN_KB)
+            await update.message.reply_text(f"✅ Intervalo global actualizado a {iv}s.", reply_markup=MAIN_KB)
         except:
             await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
         context.user_data.pop("waiting_for")
         return
 
     if waiting == "interval_select":
-        page = context.user_data.get("interval_page",0)
+        page = context.user_data.get("interval_page", 0)
         items, has_next = paginate_list(mens, page, ITEMS_PER_PAGE)
         try:
             idx = int(text)-1
@@ -481,17 +500,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             if text == "➡️ Siguiente" and has_next:
                 page+=1
-                context.user_data["interval_page"] = page
+                context.user_data["interval_page"]=page
                 items, has_next = paginate_list(mens, page, ITEMS_PER_PAGE)
-                lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)"
-                                  for i,m in enumerate(items))
+                lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i,m in enumerate(items))
                 kb = [[str(i+1) for i in range(len(items))]]
                 if has_next:
                     kb.append(["➡️ Siguiente"])
                 kb.append(["🔙 Volver"])
-                await update.message.reply_text(f"📄 *Selecciona mensaje:* \n{lines}",
-                                               parse_mode="Markdown",
-                                               reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
+                await update.message.reply_text(
+                    f"📄 *Selecciona mensaje:*\n{lines}",
+                    parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+                )
             else:
                 await start(update, context)
         return
@@ -524,8 +544,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             iv = int(text)
             lname = context.user_data.get("interval_list_name")
             for m in mens:
-                if m.get("dest_list") == lname:
-                    m["intervalo_segundos"] = iv
+                if m.get("dest_list")==lname:
+                    m["intervalo_segundos"]=iv
             mensajes_manager.save_mensajes(mens)
             await update.message.reply_text(f"✅ Intervalo de lista `{lname}` actualizado a {iv}s.", reply_markup=MAIN_KB)
         except:
@@ -546,7 +566,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_config(cfg)
             await update.message.reply_text(f"✅ Zona cambiada a `{text}`.", parse_mode="Markdown", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Zona inválida. Intenta de nuevo.", reply_markup=BACK_KB)
+            await update.message.reply_text("❌ Zona inválida.", reply_markup=BACK_KB)
         context.user_data.pop("waiting_for")
         return
 
@@ -558,10 +578,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Opción no reconocida
     await update.message.reply_text("🤖 Opción no reconocida. Usa /start.", reply_markup=MAIN_KB)
 
-
 def get_handlers():
-    """Devuelve la lista de handlers para registrar en main.py"""
+    """Devuelve la lista de handlers para main.py"""
     return [
         CommandHandler("start", start),
         MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler)
-                      ]
+                ]
