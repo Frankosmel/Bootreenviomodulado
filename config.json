@@ -1,0 +1,10 @@
+{
+  "bot_token": "TU_TOKEN_AQUI",
+  "admin_id": 12345678,
+  "origen_chat_id": "",
+  "destinos": [],
+  "listas_destinos": {},
+  "intervalo_segundos": 60,
+  "horario": {"activo": false, "inicio": "00:00", "fin": "23:59"},
+  "timezone": "UTC"
+}
