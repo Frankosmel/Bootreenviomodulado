@@ -25,7 +25,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👥 Destinos: {len(cfg.get('destinos',[]))}\n"
         f"📁 Listas: {len(cfg.get('listas_destinos',{}))}\n"
         f"📨 Mensajes: {len(mens)}\n"
-        f"⏱️ Intervalo: {cfg.get('intervalo_segundos',60)}s\n"
+        f"⏱️ Intervalo global: {cfg.get('intervalo_segundos',60)}s\n"
         f"🌐 Zona: `{cfg.get('timezone','UTC')}`\n\n"
         "👉 Elige una opción:"
     )
@@ -40,7 +40,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     waiting = context.user_data.get("waiting_for")
 
-    # ── 1) Vincular Canal ──
+    # 1) Vincular Canal
     if text == "🔗 Vincular Canal" and not waiting:
         await update.message.reply_text(
             "✏️ *Envía el ID* de tu canal de origen (p.e. `-1001234567890`):",
@@ -78,7 +78,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("waiting_for", None)
         return
 
-    # ── 2) Agregar Mensaje manual ──
+    # 2) Agregar Mensaje manual
     if text == "➕ Agregar Mensaje" and not waiting:
         await update.message.reply_text(
             "📥 *Reenvía ahora* el mensaje desde tu canal para configurarlo:",
@@ -98,17 +98,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "intervalo_segundos": cfg.get("intervalo_segundos",60),
                 "dest_all": True,
                 "dest_list": None,
+                "delete_after": None,
                 "timestamp": datetime.utcnow().isoformat()
             }
             mens.append(nuevo)
             mensajes_manager.save_mensajes(mens)
             kb = ReplyKeyboardMarkup([
                 ["👥 A Todos","📋 Lista"],
+                ["⏱️ Intervalo","🗑️ Eliminar tras x envíos"],
                 ["✅ Guardar","❌ Cancelar"],
                 ["🏁 Finalizar"],["🔙 Volver"]
             ], resize_keyboard=True)
             await update.message.reply_text(
-                f"🔥 *Mensaje {mid} listo!* ¿A dónde reenviar?",
+                f"🔥 *Mensaje {mid} listo para configurar!*",
                 parse_mode="Markdown", reply_markup=kb
             )
             context.user_data["waiting_for"] = f"msg_cfg_{len(mens)-1}"
@@ -118,7 +120,147 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # ── 3) Gestión de Destinos ──
+    # 3) Auto-detección de forwards
+    if filter_forwarded_from_origin.filter(update.message) and not waiting:
+        mid = update.message.forward_from_message_id
+        nuevo = {
+            "from_chat_id": update.message.forward_from_chat.id,
+            "message_id": mid,
+            "intervalo_segundos": cfg.get("intervalo_segundos",60),
+            "dest_all": True,
+            "dest_list": None,
+            "delete_after": None,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        mens.append(nuevo)
+        mensajes_manager.save_mensajes(mens)
+        kb = ReplyKeyboardMarkup([
+            ["👥 A Todos","📋 Lista"],
+            ["⏱️ Intervalo","🗑️ Eliminar tras x envíos"],
+            ["✅ Guardar","❌ Cancelar"],
+            ["🏁 Finalizar"],["🔙 Volver"]
+        ], resize_keyboard=True)
+        await update.message.reply_text(
+            f"🔥 *Nuevo Mensaje ({mid}) detectado!*",
+            parse_mode="Markdown", reply_markup=kb
+        )
+        context.user_data["waiting_for"] = f"msg_cfg_{len(mens)-1}"
+        return
+
+    # 4) Flujos de configuración puntual
+    if waiting and waiting.startswith("msg_cfg_"):
+        idx = int(waiting.split("_")[-1])
+        m = mens[idx]
+
+        if text == "👥 A Todos":
+            m.update(dest_all=True, dest_list=None)
+            mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text(
+                "✅ Reenvío a *todos* destinos.", parse_mode="Markdown", reply_markup=MAIN_KB
+            )
+            context.user_data.pop("waiting_for")
+            return
+
+        if text == "📋 Lista":
+            lists = list(cfg.get("listas_destinos",{}).keys())
+            if not lists:
+                await update.message.reply_text("⚠️ No hay listas disponibles.", reply_markup=MAIN_KB)
+                context.user_data.pop("waiting_for")
+            else:
+                kb = [[n] for n in lists] + [["🔙 Volver"]]
+                await update.message.reply_text(
+                    "📋 *Selecciona lista*:", parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+                )
+                context.user_data["waiting_for"] = f"msg_list_{idx}"
+            return
+
+        if text == "⏱️ Intervalo":
+            await update.message.reply_text(
+                "⏱️ Envía nuevo intervalo (s) para este mensaje:", reply_markup=BACK_KB
+            )
+            context.user_data["waiting_for"] = f"msg_interval_{idx}"
+            return
+
+        if text == "🗑️ Eliminar tras x envíos":
+            await update.message.reply_text(
+                "🗑️ Envía número de envíos tras los cuales eliminar:", reply_markup=BACK_KB
+            )
+            context.user_data["waiting_for"] = f"msg_delete_{idx}"
+            return
+
+        if text == "✅ Guardar":
+            mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text("✅ Configuración guardada.", reply_markup=MAIN_KB)
+            context.user_data.pop("waiting_for")
+            return
+
+        if text == "❌ Cancelar":
+            mens.pop(idx)
+            mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text("❌ Configuración cancelada.", reply_markup=MAIN_KB)
+            context.user_data.pop("waiting_for")
+            return
+
+        if text == "🏁 Finalizar":
+            await update.message.reply_text(
+                "🏁 *Reenvío automático iniciado!* 🚀", parse_mode="Markdown", reply_markup=MAIN_KB
+            )
+            context.user_data.pop("waiting_for")
+            return
+
+        if text == "🔙 Volver":
+            await start(update, context)
+            context.user_data.pop("waiting_for")
+            return
+
+    # 5) Selección de lista tras 📋 Lista
+    if waiting and waiting.startswith("msg_list_"):
+        idx = int(waiting.split("_")[-1])
+        lists = cfg.get("listas_destinos",{})
+        if text in lists:
+            m = mens[idx]
+            m.update(dest_all=False, dest_list=text)
+            mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text(
+                f"✅ Reenvío a lista *{text}*.", parse_mode="Markdown", reply_markup=MAIN_KB
+            )
+        else:
+            await update.message.reply_text("🔙 Cancelado.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
+
+    # 6) Intervalo por mensaje
+    if waiting and waiting.startswith("msg_interval_"):
+        idx = int(waiting.split("_")[-1])
+        try:
+            iv = int(text)
+            mens[idx]["intervalo_segundos"] = iv
+            mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text(
+                f"✅ Intervalo de este mensaje a *{iv}s*.", parse_mode="Markdown", reply_markup=MAIN_KB
+            )
+        except:
+            await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
+
+    # 7) Delete-after por mensaje
+    if waiting and waiting.startswith("msg_delete_"):
+        idx = int(waiting.split("_")[-1])
+        try:
+            cnt = int(text)
+            mens[idx]["delete_after"] = cnt
+            mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text(
+                f"✅ Se eliminará tras *{cnt}* envíos.", parse_mode="Markdown", reply_markup=MAIN_KB
+            )
+        except:
+            await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
+
+    # 8) Gestión de Destinos
     if text == "📂 Destinos" and not waiting:
         kb = ReplyKeyboardMarkup([
             ["➕ Agregar Destino","🗑️ Eliminar Destino"],
@@ -136,19 +278,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == "🗑️ Eliminar Destino":
             ds = cfg.get("destinos", [])
             if not ds:
-                await update.message.reply_text("⚠️ No hay destinos.", reply_markup=MAIN_KB)
+                await update.message.reply_text("⚠️ No hay destinos configurados.", reply_markup=MAIN_KB)
                 context.user_data.pop("waiting_for")
             else:
                 lines = "\n".join(f"{i+1}. {d}" for i,d in enumerate(ds))
-                await update.message.reply_text(f"🗑️ Elige número:\n{lines}", reply_markup=BACK_KB)
+                await update.message.reply_text(f"🗑️ Elige el número a eliminar:\n{lines}", reply_markup=BACK_KB)
                 context.user_data["waiting_for"] = "del_destino"
         elif text == "📁 Crear Lista":
-            await update.message.reply_text("📌 Envía nombre de lista:", reply_markup=BACK_KB)
+            await update.message.reply_text("📌 Envía el *nombre* de la nueva lista:", parse_mode="Markdown", reply_markup=BACK_KB)
             context.user_data["waiting_for"] = "new_list_name"
         elif text == "📂 Gestionar Listas":
             lists = cfg.get("listas_destinos", {})
             if not lists:
-                await update.message.reply_text("⚠️ No hay listas.", reply_markup=MAIN_KB)
+                await update.message.reply_text("⚠️ No hay listas disponibles.", reply_markup=MAIN_KB)
                 context.user_data.pop("waiting_for")
             else:
                 menu = [[n] for n in lists] + [["🔙 Volver"]]
@@ -168,7 +310,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lst.append(d); save_config(cfg)
             await update.message.reply_text(f"✅ Destino `{d}` agregado.", reply_markup=MAIN_KB)
         else:
-            await update.message.reply_text("⚠️ Inválido o existe.", reply_markup=MAIN_KB)
+            await update.message.reply_text("⚠️ ID inválido o ya existe.", reply_markup=MAIN_KB)
         context.user_data.pop("waiting_for")
         return
 
@@ -177,13 +319,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             idx = int(text)-1; d = cfg["destinos"].pop(idx); save_config(cfg)
             await update.message.reply_text(f"✅ Destino `{d}` eliminado.", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Número inválido.", reply_markup=MAIN_KB)
+            await update.message.reply_text("❌ Selección inválida.", reply_markup=MAIN_KB)
         context.user_data.pop("waiting_for")
         return
 
     if waiting == "new_list_name":
         context.user_data["new_list_name"] = text.strip()
-        await update.message.reply_text("📋 Envía los IDs separados por comas o saltos de línea:", reply_markup=BACK_KB)
+        await update.message.reply_text("📋 Envía los IDs separados por comas o líneas:", reply_markup=BACK_KB)
         context.user_data["waiting_for"] = "new_list_ids"
         return
 
@@ -191,7 +333,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = context.user_data.pop("new_list_name")
         ids = [x.strip() for x in text.replace("\n",",").split(",") if x.strip()]
         lists = cfg.setdefault("listas_destinos", {}); lists[name] = ids; save_config(cfg)
-        await update.message.reply_text(f"✅ Lista `{name}` con {len(ids)} destinos.", reply_markup=MAIN_KB)
+        await update.message.reply_text(f"✅ Lista `{name}` creada con {len(ids)} destinos.", reply_markup=MAIN_KB)
         context.user_data.pop("waiting_for")
         return
 
@@ -202,7 +344,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lists = cfg.get("listas_destinos", {})
             if text in lists:
                 kb = ReplyKeyboardMarkup([["📋 Ver","❌ Eliminar"],["🔙 Volver"]], resize_keyboard=True)
-                await update.message.reply_text(f"📂 *{text}* ({len(lists[text])} items)", parse_mode="Markdown", reply_markup=kb)
+                await update.message.reply_text(
+                    f"📂 *{text}* ({len(lists[text])} destinos)", parse_mode="Markdown", reply_markup=kb
+                )
                 context.user_data["waiting_for"] = f"list_{text}"
         return
 
@@ -219,84 +363,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("waiting_for")
         return
 
-    # ── 4) Auto-detección de forwards ──
-    if filter_forwarded_from_origin.filter(update.message) and not waiting:
-        mid = update.message.forward_from_message_id
-        nuevo = {
-            "from_chat_id": update.message.forward_from_chat.id,
-            "message_id": mid,
-            "intervalo_segundos": cfg.get("intervalo_segundos",60),
-            "dest_all": True,
-            "dest_list": None,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        mens.append(nuevo); mensajes_manager.save_mensajes(mens)
-        kb = ReplyKeyboardMarkup([
-            ["👥 A Todos","📋 Lista"],
-            ["✅ Guardar","❌ Cancelar"],
-            ["🏁 Finalizar"],["🔙 Volver"]
-        ], resize_keyboard=True)
-        await update.message.reply_text(
-            f"🔥 *Nuevo Mensaje ({mid})*\nIntervalo `{nuevo['intervalo_segundos']}s`\n¿Destino?",
-            parse_mode="Markdown", reply_markup=kb
-        )
-        context.user_data["waiting_for"] = f"msg_cfg_{len(mens)-1}"
-        return
-
-    # ── 5) Configurar mensaje puntual ──
-    if waiting and waiting.startswith("msg_cfg_"):
-        idx = int(waiting.split("_")[-1]); m = mens[idx]
-        if text == "👥 A Todos":
-            m.update(dest_all=True, dest_list=None)
-            mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text("✅ Reenvío a *todos* configurado.", parse_mode="Markdown", reply_markup=MAIN_KB)
-            context.user_data.pop("waiting_for")
-        elif text == "📋 Lista":
-            lists = list(cfg.get("listas_destinos",{}).keys())
-            if not lists:
-                await update.message.reply_text("⚠️ No hay listas.", reply_markup=MAIN_KB)
-                context.user_data.pop("waiting_for")
-            else:
-                kb = [[n] for n in lists] + [["🔙 Volver"]]
-                await update.message.reply_text("📋 *Selecciona lista*:", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
-                context.user_data["waiting_for"] = f"msg_list_{idx}"
-        elif text == "✅ Guardar":
-            await update.message.reply_text("✅ Configuración guardada.", reply_markup=MAIN_KB)
-            context.user_data.pop("waiting_for")
-        elif text == "❌ Cancelar":
-            mens.pop(idx); mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text("❌ Configuración cancelada.", reply_markup=MAIN_KB)
-            context.user_data.pop("waiting_for")
-        elif text == "🏁 Finalizar":
-            await update.message.reply_text("🏁 *Reenvío automático iniciado!* 🚀", parse_mode="Markdown", reply_markup=MAIN_KB)
-            context.user_data.pop("waiting_for")
-        elif text == "🔙 Volver":
-            await start(update, context); context.user_data.pop("waiting_for")
-        return
-
-    if waiting and waiting.startswith("msg_list_"):
-        idx = int(waiting.split("_")[-1]); lists = cfg.get("listas_destinos",{})
-        if text in lists:
-            m = mens[idx]; m.update(dest_all=False, dest_list=text)
-            mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text(f"✅ Reenvío a lista *{text}*.", parse_mode="Markdown", reply_markup=MAIN_KB)
-        else:
-            await update.message.reply_text("🔙 Cancelado.", reply_markup=MAIN_KB)
-        context.user_data.pop("waiting_for")
-        return
-
-    # ── 6) Editar Mensaje ──
+    # 9) Editar Mensaje
     if text == "✏️ Editar Mensaje" and not waiting:
         if not mens:
-            await update.message.reply_text("⚠️ No hay mensajes.", reply_markup=MAIN_KB)
+            await update.message.reply_text("⚠️ No hay mensajes configurados.", reply_markup=MAIN_KB)
             return
         page_items, has_next = paginate_list(mens, 0, ITEMS_PER_PAGE)
         lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i,m in enumerate(page_items))
         kb = [[str(i+1) for i in range(len(page_items))]]
-        if has_next: kb.append(["➡️ Siguiente"])
+        if has_next:
+            kb.append(["➡️ Siguiente"])
         kb.append(["🔙 Volver"])
         await update.message.reply_text(
-            f"✏️ *Selecciona mensaje:* \n{lines}", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True)
+            f"✏️ *Selecciona mensaje a editar:*\n{lines}",
+            parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
         )
         context.user_data.update({"waiting_for":"edit_select","edit_page":0})
         return
@@ -305,70 +385,81 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         page = context.user_data.get("edit_page",0)
         items, has_next = paginate_list(mens,page,ITEMS_PER_PAGE)
         try:
-            idx = int(text)-1; global_idx = page*ITEMS_PER_PAGE+idx
-            context.user_data["edit_idx"]=global_idx
+            idx = int(text) - 1
+            global_idx = page*ITEMS_PER_PAGE + idx
+            context_user_data = context.user_data
+            context_user_data["edit_idx"] = global_idx
             kb = ReplyKeyboardMarkup([
                 ["🕒 Cambiar Intervalo","👥 Cambiar Destino"],
                 ["📋 Cambiar Lista","🗑️ Eliminar Mensaje"],
                 ["🔙 Volver"]
             ], resize_keyboard=True)
-            await update.message.reply_text("🔧 *¿Qué modificas?*", parse_mode="Markdown", reply_markup=kb)
+            await update.message.reply_text("🔧 *¿Qué deseas modificar?*", parse_mode="Markdown", reply_markup=kb)
             context.user_data["waiting_for"]="edit_menu"
         except:
             if text=="➡️ Siguiente" and has_next:
                 page+=1; context.user_data["edit_page"]=page
-                items, has_next = paginate_list(mens,page,ITEMS_PER_PAGE)
+                items, has_next=paginate_list(mens,page,ITEMS_PER_PAGE)
                 lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i,m in enumerate(items))
                 kb=[[str(i+1) for i in range(len(items))]]
                 if has_next: kb.append(["➡️ Siguiente"])
                 kb.append(["🔙 Volver"])
-                await update.message.reply_text(f"✏️ *Selecciona mensaje:* \n{lines}", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
+                await update.message.reply_text(
+                    f"✏️ *Selecciona mensaje:*\n{lines}",
+                    parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True)
+                )
             else:
                 await start(update, context)
         return
 
     if waiting == "edit_menu":
-        idx = context.user_data.get("edit_idx"); m = mens[idx]
+        idx = context.user_data.get("edit_idx")
+        m = mens[idx]
         if text == "🕒 Cambiar Intervalo":
             await update.message.reply_text("⏱️ Envía nuevo intervalo (s):", reply_markup=BACK_KB)
-            context.user_data["waiting_for"]="edit_interval"
-        elif text == "🗑️ Eliminar Mensaje":
-            mens.pop(idx); mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text("✅ Mensaje eliminado.", reply_markup=MAIN_KB)
-            context.user_data.pop("waiting_for")
+            context.user_data["waiting_for"] = "edit_interval"
         elif text == "👥 Cambiar Destino":
-            await update.message.reply_text("👥 *¿Todos o Lista?*", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup([["👥 A Todos","📋 Lista"],["🔙 Volver"]],resize_keyboard=True))
+            await update.message.reply_text(
+                "👥 *¿Enviar a todos o a lista?*",
+                parse_mode="Markdown",
+                reply_markup=ReplyKeyboardMarkup([["👥 A Todos","📋 Lista"],["🔙 Volver"]],resize_keyboard=True)
+            )
             context.user_data["waiting_for"]="edit_choose_dest"
         elif text == "📋 Cambiar Lista":
-            lists=list(cfg.get("listas_destinos",{}).keys())
+            lists = list(cfg.get("listas_destinos",{}).keys())
             if not lists:
                 await update.message.reply_text("⚠️ No hay listas.", reply_markup=MAIN_KB)
                 context.user_data.pop("waiting_for")
             else:
-                kb=[[n] for n in lists]+[["🔙 Volver"]]
+                kb = [[n] for n in lists]+[["🔙 Volver"]]
                 await update.message.reply_text("📋 *Selecciona lista*:", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
                 context.user_data["waiting_for"]="edit_list_idx"
+        elif text == "🗑️ Eliminar Mensaje":
+            mens.pop(idx); mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text("✅ Mensaje eliminado.", reply_markup=MAIN_KB)
+            context.user_data.pop("waiting_for")
         elif text == "🔙 Volver":
             await start(update, context); context.user_data.pop("waiting_for")
         return
 
     if waiting == "edit_interval":
         try:
-            iv=int(text); idx=context.user_data.get("edit_idx")
+            iv = int(text); idx=context.user_data.get("edit_idx")
             mens[idx]["intervalo_segundos"]=iv; mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text(f"✅ Intervalo ajustado a *{iv}s*.", parse_mode="Markdown", reply_markup=MAIN_KB)
+            await update.message.reply_text(f"✅ Intervalo actualizado a *{iv}s*.", parse_mode="Markdown", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Formato incorrecto.", reply_markup=MAIN_KB)
-        context.user_data.pop("waiting_for"); return
+            await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
 
     if waiting == "edit_choose_dest":
-        idx=context.user_data.get("edit_idx")
-        if text=="👥 A Todos":
-            mens[idx].update(dest_all=True,dest_list=None); mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text("✅ Se reenviará a *todos*.", parse_mode="Markdown", reply_markup=MAIN_KB)
+        idx = context.user_data.get("edit_idx")
+        if text == "👥 A Todos":
+            mens[idx].update(dest_all=True, dest_list=None); mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text("✅ Ahora reenviará a *todos*.", parse_mode="Markdown", reply_markup=MAIN_KB)
             context.user_data.pop("waiting_for")
-        elif text=="📋 Lista":
-            lists=list(cfg.get("listas_destinos",{}).keys())
+        elif text == "📋 Lista":
+            lists = list(cfg.get("listas_destinos",{}).keys())
             if not lists:
                 await update.message.reply_text("⚠️ No hay listas.", reply_markup=MAIN_KB); context.user_data.pop("waiting_for")
             else:
@@ -380,140 +471,167 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if waiting == "edit_list_idx":
-        idx=context.user_data.get("edit_idx"); lists=cfg.get("listas_destinos",{})
+        idx = context.user_data.get("edit_idx"); lists = cfg.get("listas_destinos",{})
         if text in lists:
             mens[idx].update(dest_all=False,dest_list=text); mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text(f"✅ Destino cambiado a *{text}*.", parse_mode="Markdown", reply_markup=MAIN_KB)
+            await update.message.reply_text(f"✅ Destino cambiado a lista *{text}*.", parse_mode="Markdown", reply_markup=MAIN_KB)
         else:
             await update.message.reply_text("🔙 Cancelado.", reply_markup=MAIN_KB)
         context.user_data.pop("waiting_for"); return
 
-    # ── 6) Eliminar Mensaje ──
-    if text=="🗑️ Eliminar Mensaje" and not waiting:
+    # 10) Eliminar Mensaje
+    if text == "🗑️ Eliminar Mensaje" and not waiting:
         if not mens:
-            await update.message.reply_text("⚠️ No hay mensajes.", reply_markup=MAIN_KB); return
-        lines="\n".join(f"{i+1}. {m['message_id']}" for i,m in enumerate(mens))
-        await update.message.reply_text(f"🗑️ Elige número:\n{lines}", reply_markup=BACK_KB)
-        context.user_data["waiting_for"]="del_msg"; return
+            await update.message.reply_text("⚠️ No hay mensajes para eliminar.", reply_markup=MAIN_KB)
+            return
+        lines = "\n".join(f"{i+1}. {m['message_id']}" for i,m in enumerate(mens))
+        await update.message.reply_text(f"🗑️ Selecciona número a eliminar:\n{lines}", reply_markup=BACK_KB)
+        context.user_data["waiting_for"] = "del_msg"
+        return
 
-    if waiting=="del_msg":
+    if waiting == "del_msg":
         try:
-            idx=int(text)-1; m=mens.pop(idx); mensajes_manager.save_mensajes(mens)
+            idx = int(text)-1; m = mens.pop(idx); mensajes_manager.save_mensajes(mens)
             await update.message.reply_text(f"✅ Mensaje `{m['message_id']}` eliminado.", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Número inválido.", reply_markup=MAIN_KB)
-        context.user_data.pop("waiting_for"); return
+            await update.message.reply_text("❌ Selección inválida.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
 
-    # ── 7) Cambiar Intervalo ──
-    if text=="🔁 Cambiar Intervalo" and not waiting:
-        kb=ReplyKeyboardMarkup([["🌐 Global","📄 Por Mensaje"],["📁 Por Lista"],["🔙 Volver"]],resize_keyboard=True)
+    # 11) Cambiar Intervalo
+    if text == "🔁 Cambiar Intervalo" and not waiting:
+        kb = ReplyKeyboardMarkup([
+            ["🌐 Global","📄 Por Mensaje"],
+            ["📁 Por Lista"],["🔙 Volver"]
+        ], resize_keyboard=True)
         await update.message.reply_text("🔁 *Cambiar Intervalo*", parse_mode="Markdown", reply_markup=kb)
-        context.user_data["waiting_for"]="interval_menu"; return
+        context.user_data["waiting_for"] = "interval_menu"
+        return
 
-    if waiting=="interval_menu":
-        if text=="🌐 Global":
+    if waiting == "interval_menu":
+        if text == "🌐 Global":
             await update.message.reply_text("⏱️ Envía nuevo intervalo global (s):", reply_markup=BACK_KB)
-            context.user_data["waiting_for"]="interval_global"
-        elif text=="📄 Por Mensaje":
+            context.user_data["waiting_for"] = "interval_global"
+        elif text == "📄 Por Mensaje":
             if not mens:
-                await update.message.reply_text("⚠️ No hay mensajes.", reply_markup=MAIN_KB); context.user_data.pop("waiting_for")
+                await update.message.reply_text("⚠️ No hay mensajes configurados.", reply_markup=MAIN_KB)
+                context.user_data.pop("waiting_for")
             else:
-                page_items,has_next=paginate_list(mens,0,ITEMS_PER_PAGE)
-                lines="\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i,m in enumerate(page_items))
-                kb=[[str(i+1) for i in range(len(page_items))]]+([["➡️ Siguiente"]] if has_next else [])+[["🔙 Volver"]]
-                await update.message.reply_text(f"📄 *Selecciona mensaje:* \n{lines}",parse_mode="Markdown",reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
+                page_items, has_next = paginate_list(mens, 0, ITEMS_PER_PAGE)
+                lines = "\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i,m in enumerate(page_items))
+                kb = [[str(i+1) for i in range(len(page_items))]]
+                if has_next: kb.append(["➡️ Siguiente"])
+                kb.append(["🔙 Volver"])
+                await update.message.reply_text(
+                    f"📄 *Selecciona mensaje:*\n{lines}",
+                    parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+                )
                 context.user_data.update({"waiting_for":"interval_select","interval_page":0})
-        elif text=="📁 Por Lista":
-            lists=list(cfg.get("listas_destinos",{}).keys())
+        elif text == "📁 Por Lista":
+            lists = list(cfg.get("listas_destinos",{}).keys())
             if not lists:
-                await update.message.reply_text("⚠️ No hay listas.", reply_markup=MAIN_KB); context.user_data.pop("waiting_for")
+                await update.message.reply_text("⚠️ No hay listas disponibles.", reply_markup=MAIN_KB)
+                context.user_data.pop("waiting_for")
             else:
-                kb=[[n] for n in lists]+[["🔙 Volver"]]
-                await update.message.reply_text("📁 *Selecciona lista*:", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
-                context.user_data["waiting_for"]="interval_list"
-        elif text=="🔙 Volver":
+                kb = [[n] for n in lists] + [["🔙 Volver"]]
+                await update.message.reply_text("📁 *Selecciona lista*:", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+                context.user_data["waiting_for"] = "interval_list"
+        elif text == "🔙 Volver":
             await start(update, context); context.user_data.pop("waiting_for")
         return
 
-    if waiting=="interval_global":
+    if waiting == "interval_global":
         try:
-            iv=int(text); cfg["intervalo_segundos"]=iv; save_config(cfg)
-            await update.message.reply_text(f"✅ Intervalo global a *{iv}s*.", parse_mode="Markdown",reply_markup=MAIN_KB)
+            iv = int(text); cfg["intervalo_segundos"] = iv; save_config(cfg)
+            await update.message.reply_text(f"✅ Intervalo global a *{iv}s*.", parse_mode="Markdown", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Inválido.", reply_markup=MAIN_KB)
-        context.user_data.pop("waiting_for"); return
+            await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
 
-    if waiting=="interval_select":
-        page=context.user_data.get("interval_page",0)
-        items,has_next=paginate_list(mens,page,ITEMS_PER_PAGE)
+    if waiting == "interval_select":
+        page = context.user_data.get("interval_page",0)
+        items, has_next = paginate_list(mens, page, ITEMS_PER_PAGE)
         try:
-            idx=int(text)-1; gid=page*ITEMS_PER_PAGE+idx
-            context.user_data["interval_msg_idx"]=gid
-            await update.message.reply_text("⏱️ Envía nuevo intervalo (s):",reply_markup=BACK_KB)
-            context.user_data["waiting_for"]="interval_msg_value"
+            idx = int(text)-1; gid = page*ITEMS_PER_PAGE+idx
+            context.user_data["interval_msg_idx"] = gid
+            await update.message.reply_text("⏱️ Envía nuevo intervalo (s):", reply_markup=BACK_KB)
+            context.user_data["waiting_for"] = "interval_msg_value"
         except:
             if text=="➡️ Siguiente" and has_next:
                 page+=1; context.user_data["interval_page"]=page
                 items,has_next=paginate_list(mens,page,ITEMS_PER_PAGE)
                 lines="\n".join(f"{i+1}. {m['message_id']} ({m['intervalo_segundos']}s)" for i,m in enumerate(items))
-                kb=[[str(i+1) for i in range(len(items))]]+([["➡️ Siguiente"]] if has_next else [])+[["🔙 Volver"]]
-                await update.message.reply_text(f"📄 *Selecciona mensaje:* \n{lines}",parse_mode="Markdown",reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
+                kb=[[str(i+1) for i in range(len(items))]]
+                if has_next: kb.append(["➡️ Siguiente"])
+                kb.append(["🔙 Volver"])
+                await update.message.reply_text(
+                    f"📄 *Selecciona mensaje:* \n{lines}",
+                    parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True)
+                )
             else:
                 await start(update, context)
         return
 
-    if waiting=="interval_msg_value":
+    if waiting == "interval_msg_value":
         try:
-            iv=int(text); idx=context.user_data.get("interval_msg_idx")
-            mens[idx]["intervalo_segundos"]=iv; mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text(f"✅ Intervalo del mensaje a *{iv}s*.", parse_mode="Markdown",reply_markup=MAIN_KB)
+            iv = int(text); idx=context.user_data.get("interval_msg_idx")
+            mens[idx]["intervalo_segundos"] = iv; mensajes_manager.save_mensajes(mens)
+            await update.message.reply_text(f"✅ Intervalo del mensaje a *{iv}s*.", parse_mode="Markdown", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Inválido.", reply_markup=MAIN_KB)
-        context.user_data.pop("waiting_for"); return
+            await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
+        return
 
-    if waiting=="interval_list":
-        lists=cfg.get("listas_destinos",{})
+    if waiting == "interval_list":
+        lists = cfg.get("listas_destinos",{})
         if text in lists:
-            context.user_data["interval_list_name"]=text
-            await update.message.reply_text(f"⏱️ Envía intervalo (s) para lista *{text}*:", parse_mode="Markdown",reply_markup=BACK_KB)
-            context.user_data["waiting_for"]="interval_list_value"
+            context.user_data["interval_list_name"] = text
+            await update.message.reply_text(f"⏱️ Envía nuevo intervalo (s) para la lista *{text}*:", parse_mode="Markdown", reply_markup=BACK_KB)
+            context.user_data["waiting_for"] = "interval_list_value"
         else:
             await start(update, context); context.user_data.pop("waiting_for")
         return
 
-    if waiting=="interval_list_value":
+    if waiting == "interval_list_value":
         try:
-            iv=int(text); lname=context.user_data.get("interval_list_name")
+            iv = int(text); lname=context.user_data.get("interval_list_name")
             for m in mens:
-                if m.get("dest_list")==lname:
-                    m["intervalo_segundos"]=iv
+                if m.get("dest_list") == lname:
+                    m["intervalo_segundos"] = iv
             mensajes_manager.save_mensajes(mens)
-            await update.message.reply_text(f"✅ Intervalo de lista *{lname}* a *{iv}s*.", parse_mode="Markdown",reply_markup=MAIN_KB)
+            await update.message.reply_text(f"✅ Intervalo de lista *{lname}* a *{iv}s*.", parse_mode="Markdown", reply_markup=MAIN_KB)
         except:
-            await update.message.reply_text("❌ Inválido.", reply_markup=MAIN_KB)
-        context.user_data.pop("waiting_for"); return
-
-    # ── 8) Cambiar Zona ──
-    if text=="🌐 Cambiar Zona" and not waiting:
-        await update.message.reply_text("🌐 *Envía nueva zona* (e.g. `Europe/Madrid`):", parse_mode="Markdown", reply_markup=BACK_KB)
-        context.user_data["waiting_for"]="change_zone"
+            await update.message.reply_text("❌ Valor inválido.", reply_markup=MAIN_KB)
+        context.user_data.pop("waiting_for")
         return
 
-    if waiting=="change_zone":
+    # 12) Cambiar Zona
+    if text == "🌐 Cambiar Zona" and not waiting:
+        await update.message.reply_text("🌐 *Envía nueva zona* (e.g. `Europe/Madrid`):", parse_mode="Markdown", reply_markup=BACK_KB)
+        context.user_data["waiting_for"] = "change_zone"
+        return
+
+    if waiting == "change_zone":
         try:
             pytz.timezone(text)
-            cfg["timezone"]=text; save_config(cfg)
+            cfg["timezone"] = text; save_config(cfg)
             await update.message.reply_text(f"✅ Zona a `{text}`.", reply_markup=MAIN_KB)
         except:
             await update.message.reply_text("❌ Zona inválida.", reply_markup=BACK_KB)
-        context.user_data.pop("waiting_for"); return
+        context.user_data.pop("waiting_for")
+        return
 
-    # ── 9) Estado ──
-    if text=="📄 Estado del Bot" and not waiting:
-        await start(update, context); return
+    # 13) Estado del Bot
+    if text == "📄 Estado del Bot" and not waiting:
+        await start(update, context)
+        return
 
-    # fallback
-    await update.message.reply_text("🤖 Opción no reconocida. /start → Menú principal.", reply_markup=MAIN_KB)
+    # Fallback
+    await update.message.reply_text(
+        "🤖 Opción no reconocida. Escribe /start para volver al menú principal.",
+        reply_markup=MAIN_KB
+    )
 
 def get_handlers():
     return [
