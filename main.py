@@ -1,4 +1,4 @@
-om telegram.ext import Application
+from telegram.ext import Application
 from config_manager import load_config
 from mensajes_manager import load_mensajes
 from logger_config import setup_logging
